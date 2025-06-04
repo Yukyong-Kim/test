@@ -15,16 +15,12 @@ import openpyxl
 
 # 한글 폰트 설정 (시스템에 설치된 한글 폰트 사용)
 try:
-    # Windows의 경우
-    if os.path.exists("C:/Windows/Fonts/malgun.ttf"):
-        pdfmetrics.registerFont(TTFont('Malgun', 'C:/Windows/Fonts/malgun.ttf'))
-        korean_font = 'Malgun'
-    # macOS의 경우
-    elif os.path.exists("/System/Library/Fonts/AppleSDGothicNeo.ttc"):
-        pdfmetrics.registerFont(TTFont('AppleGothic', '/System/Library/Fonts/AppleSDGothicNeo.ttc'))
-        korean_font = 'AppleGothic'
+    font_path = os.path.join(os.path.dirname(__file__), "NotoSansKR-Regular.ttf")
+    if os.path.exists(font_path):
+        pdfmetrics.registerFont(TTFont("NotoSans", font_path))
+        korean_font = "NotoSans"
     else:
-        korean_font = 'Helvetica'  # 폴백 폰트
+        korean_font = "Helvetica"  # fallback    
 except:
     korean_font = 'Helvetica'
 
