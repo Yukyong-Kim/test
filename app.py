@@ -1,215 +1,475 @@
 import streamlit as st
-import requests
-from bs4 import BeautifulSoup
-from datetime import datetime
-import re
-from collections import Counter
-from textblob import TextBlob, Word
-import matplotlib.pyplot as plt
-import random
+import sqlite3
+import hashlib
+import pandas as pd
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib import colors
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+import io
+import os
+import openpyxl
 
-st.set_page_config(page_title="📰 News Comparison Tool", layout="wide")
-
-# Initialize session state
-if "articles" not in st.session_state:
-    st.session_state.articles = []
-if "selected_articles" not in st.session_state:
-    st.session_state.selected_articles = []
-
-section_urls = {
-    "Technology": "https://www.bbc.com/news/technology",
-    "Health": "https://www.bbc.com/news/health",
-    "Science": "https://www.bbc.com/news/science_and_environment"
-}
-
-# Sidebar for input
-st.sidebar.title("🔎 News Fetching")
-selected_section = st.sidebar.selectbox("Select News Section", list(section_urls.keys()))
-search_term = st.sidebar.text_input("Search Keywords (up to 3)")
-fetch_btn = st.sidebar.button("Fetch Articles")
-
-# Helper functions
-def classify_tone(text):
-    polarity = TextBlob(text).sentiment.polarity
-    if polarity > 0.1:
-        return "Positive"
-    elif polarity < -0.1:
-        return "Negative"
+# 한글 폰트 설정 (시스템에 설치된 한글 폰트 사용)
+try:
+    # Windows의 경우
+    if os.path.exists("C:/Windows/Fonts/malgun.ttf"):
+        pdfmetrics.registerFont(TTFont('Malgun', 'C:/Windows/Fonts/malgun.ttf'))
+        korean_font = 'Malgun'
+    # macOS의 경우
+    elif os.path.exists("/System/Library/Fonts/AppleSDGothicNeo.ttc"):
+        pdfmetrics.registerFont(TTFont('AppleGothic', '/System/Library/Fonts/AppleSDGothicNeo.ttc'))
+        korean_font = 'AppleGothic'
     else:
-        return "Neutral"
+        korean_font = 'Helvetica'  # 폴백 폰트
+except:
+    korean_font = 'Helvetica'
 
-def extract_keywords(text, top_n=5):
-    words = re.findall(r'\b[a-zA-Z]{4,}\b', text.lower())
-    stop_words = set(["this", "that", "with", "from", "have", "will", "which", "about", "their",
-        "they", "been", "were", "would", "could", "should", "while", "after", "before",
-        "said", "says", "news", "report", "more", "than", "some", "most", "other",
-        "what", "when", "where", "your", "also", "just", "over", "into", "under", "against",
-        "there", "these", "those", "however", "because", "since", "being", "through"])
-    words = [w for w in words if w not in stop_words]
-    freq = Counter(words)
-    keywords = [word for word, _ in freq.most_common(top_n)]
-    while len(keywords) < top_n:
-        keywords.append("relevant")
-    return keywords
+# 데이터베이스 초기화
+def init_database():
+    conn = sqlite3.connect('major_selection.db')
+    cursor = conn.cursor()
+    
+    # 사용자 테이블
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            student_id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            password_hash TEXT NOT NULL
+        )
+    ''')
+    
+    # 신청 정보 테이블
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS applications (
+            student_id TEXT PRIMARY KEY,
+            gpa REAL,
+            completed_courses TEXT,
+            major_1 TEXT,
+            major_2 TEXT,
+            major_3 TEXT,
+            major_4 TEXT,
+            major_5 TEXT,
+            is_submitted BOOLEAN DEFAULT FALSE,
+            FOREIGN KEY (student_id) REFERENCES users (student_id)
+        )
+    ''')
+    
+    conn.commit()
+    conn.close()
 
-def summarize_article(content, max_words=100):
-    intro_cues = ["This article discusses", "According to the article,",
-        "The report focuses on", "In this article,", "It is reported that"]
-    conclusion_cues = ["In conclusion,", "To summarize,", "Overall,", "Ultimately,", "In essence,"]
-    enumerate_cues = ["First,", "Second,", "In addition,", "Furthermore,", "Lastly,"]
-    sentences = re.split(r'(?<=[.!?]) +', content.strip())
-    if len(sentences) >= 5:
-        enumerated = [f"{enumerate_cues[i]} {sentences[i]}" for i in range(min(4, len(sentences)))]
-        intro = f"{random.choice(intro_cues)} {sentences[0].lower()}"
-        outro = f"{random.choice(conclusion_cues)} {sentences[-1]}"
-        summary = intro + ' ' + ' '.join(enumerated) + ' ' + outro
-        return ' '.join(summary.split()[:max_words]) + ('...' if len(summary.split()) > max_words else '')
-    elif len(sentences) >= 3:
-        intro = f"{random.choice(intro_cues)} {sentences[0].lower()}"
-        outro = f"{random.choice(conclusion_cues)} {sentences[-1]}"
-        summary = intro + ' ' + sentences[1] + ' ' + outro
-        return ' '.join(summary.split()[:max_words]) + ('...' if len(summary.split()) > max_words else '')
-    elif sentences:
-        summary = f"{random.choice(intro_cues)} {sentences[0]}"
-        return ' '.join(summary.split()[:max_words]) + ('...' if len(summary.split()) > max_words else '')
-    return "Summary not available."
+# 비밀번호 해시화
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
 
-# Fetch articles
-if fetch_btn:
-    guide_url = section_urls[selected_section]
-    headers = {"User-Agent": "Mozilla/5.0"}
-    terms = [t.lower() for t in search_term.strip().split()[:3]] if search_term.strip() else []
-    st.session_state.articles.clear()
-
+# 사용자 등록
+def register_user(student_id, name, password):
+    conn = sqlite3.connect('major_selection.db')
+    cursor = conn.cursor()
+    
     try:
-        response = requests.get(guide_url, headers=headers)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, "html.parser")
-        headlines = soup.select("a[href^='/news']")
-        seen = set()
-        temp_articles = []
+        cursor.execute('''
+            INSERT INTO users (student_id, name, password_hash)
+            VALUES (?, ?, ?)
+        ''', (student_id, name, hash_password(password)))
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+    finally:
+        conn.close()
 
-        for tag in headlines:
-            href = tag.get("href")
-            full_url = href if href.startswith("http") else f"https://www.bbc.com{href}"
-            title = tag.get_text(strip=True)
-            if not title or full_url in seen:
-                continue
-            seen.add(full_url)
+# 관리자 계정 식별 포함된 로그인 함수 (변경됨)
+def login_user(student_id, password):
+    conn = sqlite3.connect('major_selection.db')
+    cursor = conn.cursor()
 
-            try:
-                article_response = requests.get(full_url, headers=headers)
-                article_soup = BeautifulSoup(article_response.text, "html.parser")
-                time_tag = article_soup.find("time")
-                pub_date = datetime.fromisoformat(time_tag["datetime"].replace("Z", "+00:00")) if time_tag and time_tag.has_attr("datetime") else None
-                paragraphs = article_soup.find_all("p")
-                content_text = " ".join(p.get_text() for p in paragraphs)
-            except:
-                continue
+    cursor.execute('''
+        SELECT name FROM users 
+        WHERE student_id = ? AND password_hash = ?
+    ''', (student_id, hash_password(password)))
 
-            if not content_text.strip():
-                continue
+    result = cursor.fetchone()
+    conn.close()
 
-            if terms and not any(term in f"{title} {content_text}".lower() for term in terms):
-                continue
+    if result:
+        if student_id == 'admin':
+            return '관리자'
+        return result[0]
+    return None
 
-            tone_label = classify_tone(title + " " + content_text)
-            temp_articles.append({
-                "title": title,
-                "source": "BBC",
-                "date": pub_date,
-                "content": content_text,
-                "url": full_url,
-                "tone": tone_label
-            })
+# 신청 정보 저장
+def save_application(student_id, gpa, courses, majors, is_submitted=False):
+    conn = sqlite3.connect('major_selection.db')
+    cursor = conn.cursor()
+    
+    courses_str = ','.join(courses) if courses else ''
+    
+    cursor.execute('''
+        INSERT OR REPLACE INTO applications 
+        (student_id, gpa, completed_courses, major_1, major_2, major_3, major_4, major_5, is_submitted)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (student_id, gpa, courses_str, majors[0], majors[1], majors[2], majors[3], majors[4], is_submitted))
+    
+    conn.commit()
+    conn.close()
 
-        dated = sorted([a for a in temp_articles if a["date"]], key=lambda x: x["date"], reverse=True)
-        st.session_state.articles.extend(dated[:10])
-        if len(st.session_state.articles) < 6:
-            unknown = [a for a in temp_articles if not a["date"]]
-            st.session_state.articles.extend(unknown[:(6 - len(st.session_state.articles))])
+# 신청 정보 조회
+def get_application(student_id):
+    conn = sqlite3.connect('major_selection.db')
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT gpa, completed_courses, major_1, major_2, major_3, major_4, major_5, is_submitted
+        FROM applications WHERE student_id = ?
+    ''', (student_id,))
+    
+    result = cursor.fetchone()
+    conn.close()
+    
+    if result:
+        gpa, courses_str, m1, m2, m3, m4, m5, is_submitted = result
+        courses = courses_str.split(',') if courses_str else []
+        majors = [m1, m2, m3, m4, m5]
+        return gpa, courses, majors, is_submitted
+    
+    return None, [], ['', '', '', '', ''], False
 
-        st.success(f"Fetched {len(st.session_state.articles)} articles")
-    except Exception as e:
-        st.error(f"Error fetching articles: {e}")
+# PDF 생성
+def create_pdf(student_id, name, gpa, courses, majors):
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4)
+    styles = getSampleStyleSheet()
+    
+    # 한글 스타일 정의
+    korean_style = ParagraphStyle(
+        'Korean',
+        parent=styles['Normal'],
+        fontName=korean_font,
+        fontSize=12,
+        spaceAfter=12,
+    )
+    
+    title_style = ParagraphStyle(
+        'KoreanTitle',
+        parent=styles['Title'],
+        fontName=korean_font,
+        fontSize=18,
+        spaceAfter=20,
+        alignment=1,  # 중앙 정렬
+    )
+    
+    story = []
+    
+    # 제목
+    title = Paragraph("전공 선택 신청서", title_style)
+    story.append(title)
+    story.append(Spacer(1, 20))
+    
+    # 기본 정보
+    info_data = [
+        ['학번', student_id],
+        ['이름', name],
+        ['1학기 학점', f'{gpa}/4.3'],
+        ['이수 교과목', ', '.join(courses) if courses else '없음']
+    ]
+    
+    info_table = Table(info_data, colWidths=[2*inch, 4*inch])
+    info_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (0, -1), colors.lightgrey),
+        ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('FONTNAME', (0, 0), (-1, -1), korean_font),
+        ('FONTSIZE', (0, 0), (-1, -1), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 12),
+        ('BACKGROUND', (0, 0), (-1, -1), colors.beige),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+    ]))
+    
+    story.append(info_table)
+    story.append(Spacer(1, 20))
+    
+    # 전공 지망 순위
+    major_title = Paragraph("전공 지망 순위", korean_style)
+    story.append(major_title)
+    
+    major_names = ['인공지능', '컴퓨터과학', '데이터사이언스', '신소재물리', '지능형전자시스템']
+    major_data = [['순위', '전공명']]
+    
+    for i, major in enumerate(majors):
+        if major:
+            major_data.append([f'{i+1}지망', major])
+    
+    major_table = Table(major_data, colWidths=[1.5*inch, 4*inch])
+    major_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, -1), korean_font),
+        ('FONTSIZE', (0, 0), (-1, -1), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 12),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+    ]))
+    
+    story.append(major_table)
+    
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
 
-# Display article table
-if st.session_state.articles:
-    st.subheader("📄 Articles")
-    titles = [f"{a['title']} ({a['date'].strftime('%Y-%m-%d') if a['date'] else 'Unknown'}) - {a['tone']}" for a in st.session_state.articles]
-    selected = st.multiselect("Select Articles", titles)
-    st.session_state.selected_articles = [a for a in st.session_state.articles if f"{a['title']}" in str(selected)]
-
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("👁 View Selected"):
-            for a in st.session_state.selected_articles:
-                st.markdown(f"### {a['title']}")
-                st.markdown(f"**Source**: {a['source']} | **Date**: {a['date']}")
-                st.text_area("Content", a['content'], height=200)
-
-    with col2:
-        if st.button("📊 Analyze Tone"):
-            fig, ax = plt.subplots(figsize=(8, 5))
-            sentiments = {"Positive": [], "Negative": [], "Neutral": []}
-            for article in st.session_state.selected_articles:
-                words = re.findall(r'\b[a-zA-Z]{3,}\b', article['content'].lower())
-                counts = {"Positive": 0, "Negative": 0, "Neutral": 0}
-                for word in words:
-                    polarity = TextBlob(Word(word)).sentiment.polarity
-                    if polarity > 0.1:
-                        counts["Positive"] += 1
-                    elif polarity < -0.1:
-                        counts["Negative"] += 1
+# Streamlit 앱
+def main():
+    st.set_page_config(page_title="전공선택 신청시스템", page_icon="🎓", layout="wide")
+    
+    # 데이터베이스 초기화
+    init_database()
+    
+    st.title("🎓 전공선택 신청시스템")
+    
+    # 세션 상태 초기화
+    if 'logged_in' not in st.session_state:
+        st.session_state.logged_in = False
+    if 'student_id' not in st.session_state:
+        st.session_state.student_id = ''
+    if 'name' not in st.session_state:
+        st.session_state.name = ''
+    if 'is_admin' not in st.session_state:
+        st.session_state.is_admin = False
+    
+    # 사이드바 - 로그인/등록
+    with st.sidebar:
+        if not st.session_state.logged_in:
+            st.header("로그인 / 회원가입")
+            
+            tab1, tab2 = st.tabs(["로그인", "회원가입"])
+            
+            with tab1:
+                st.subheader("로그인")
+                login_student_id = st.text_input("학번", key="login_id")
+                login_password = st.text_input("비밀번호", type="password", key="login_pw")
+                
+                if st.button("로그인"):
+                    if login_student_id and login_password:
+                        name = login_user(login_student_id, login_password)
+                        if name:
+                            st.session_state.logged_in = True
+                            st.session_state.student_id = login_student_id
+                            st.session_state.name = name
+                            st.session_state.is_admin = (login_student_id == 'admin')
+                            st.success(f"{name}님, 환영합니다!")
+                            st.rerun()
+                        else:
+                            st.error("학번 또는 비밀번호가 잘못되었습니다.")
                     else:
-                        counts["Neutral"] += 1
-                for tone in ["Positive", "Negative", "Neutral"]:
-                    sentiments[tone].append(counts[tone])
-                st.write(f"**{article['title']}**")
-                st.write(counts)
-            labels = [a['title'][:15] + '...' for a in st.session_state.selected_articles]
-            x = range(len(labels))
-            bar_width = 0.25
-            for i, tone in enumerate(["Positive", "Negative", "Neutral"]):
-                ax.bar([p + i * bar_width for p in x], sentiments[tone], width=bar_width, label=tone)
-            ax.set_xticks([p + bar_width for p in x])
-            ax.set_xticklabels(labels, rotation=30, ha="right")
-            ax.set_ylabel("Word Count")
-            ax.set_title("Sentiment Word Frequencies")
-            ax.legend()
-            st.pyplot(fig)
+                        st.error("학번과 비밀번호를 입력해주세요.")
+            
+            with tab2:
+                st.subheader("회원가입")
+                reg_student_id = st.text_input("학번", key="reg_id")
+                reg_name = st.text_input("이름", key="reg_name")
+                reg_password = st.text_input("비밀번호", type="password", key="reg_pw")
+                reg_confirm_password = st.text_input("비밀번호 확인", type="password", key="reg_confirm_pw")
+                
+                if st.button("회원가입"):
+                    if all([reg_student_id, reg_name, reg_password, reg_confirm_password]):
+                        if reg_password == reg_confirm_password:
+                            if register_user(reg_student_id, reg_name, reg_password):
+                                st.success("회원가입이 완료되었습니다!")
+                            else:
+                                st.error("이미 등록된 학번입니다.")
+                        else:
+                            st.error("비밀번호가 일치하지 않습니다.")
+                    else:
+                        st.error("모든 항목을 입력해주세요.")
+        
+        else:
+            st.header(f"👤 {st.session_state.name}님")
+            st.write(f"학번: {st.session_state.student_id}")
+            if st.button("로그아웃"):
+                st.session_state.logged_in = False
+                st.session_state.student_id = ''
+                st.session_state.name = ''
+                st.rerun()
+    
+    # 메인 컨텐츠
+    if st.session_state.logged_in:
+        if st.session_state.is_admin:
+            st.header("📊 관리자 대시보드")
+            conn = sqlite3.connect('major_selection.db')
+            df = pd.read_sql_query('''
+                SELECT u.student_id, u.name, a.gpa, a.completed_courses,
+                   a.major_1, a.major_2, a.major_3, a.major_4, a.major_5,
+                   a.is_submitted
+                FROM users u
+                LEFT JOIN applications a ON u.student_id = a.student_id
+            ''', conn)
+            conn.close()
 
-    if st.button("📝 Generate Draft"):
-        draft = "📝 **News Comparison Draft**\n\n"
-        tones = {"Positive": [], "Negative": [], "Neutral": []}
-        for a in st.session_state.selected_articles:
-            date_str = a['date'].strftime('%Y-%m-%d') if a['date'] else "Unknown"
-            keywords = extract_keywords(a['content'])
-            summary = summarize_article(a['content'])
-            draft += f"• **{a['title']}** ({a['source']} - {date_str})\n"
-            draft += f"  → Tone: {a['tone']}\n"
-            draft += f"  → Keywords: {', '.join(keywords)}\n"
-            draft += f"  → Summary: {summary}\n\n"
-            tones[a['tone']].append(a['title'])
-        draft += "\n---\n\n📌 **Analysis Summary**\n"
-        for tone, titles in tones.items():
-            if titles:
-                draft += f"- {tone} articles: {len(titles)} ({', '.join(titles[:3])})\n"
-        st.text_area("Draft", draft, height=400)
+            st.dataframe(df)
+            excel_buffer = io.BytesIO()
+            df.to_excel(excel_buffer, index=False, engine='openpyxl')
+            excel_buffer.seek(0)
 
-    if len(st.session_state.selected_articles) == 2 and st.button("🔍 Compare 2 Articles"):
-        a1, a2 = st.session_state.selected_articles
-        k1 = extract_keywords(a1['content'], top_n=4)
-        k2 = extract_keywords(a2['content'], top_n=4)
-        comparison = f"# 📘 Comparative Analysis\n\n## Introduction\n"
-        comparison += f"Comparing \"{a1['title']}\" and \"{a2['title']}\".\n\n"
-        comparison += f"## Tone Comparison\n"
-        comparison += f"Article 1 is *{a1['tone'].lower()}*, using words like {k1[0]}, {k1[1]}.\n"
-        comparison += f"Article 2 is *{a2['tone'].lower()}*, with terms such as {k2[0]}, {k2[1]}.\n\n"
-        comparison += f"## Framing Analysis\n"
-        comparison += f"Article 1 frames the issue as a "
-        comparison += "breakthrough" if a1['tone'] == "Positive" else "controversial issue" if a1['tone'] == "Negative" else "balanced development"
-        comparison += f", while Article 2 highlights "
-        comparison += "benefits" if a2['tone'] == "Positive" else "concerns" if a2['tone'] == "Negative" else "neutral implications"
-        comparison += ".\n\n## Conclusion\nThe two articles provide contrasting perspectives."
-        st.text_area("Comparison Report", comparison, height=300)
+            st.download_button(
+                label="📥 전체 신청 데이터 Excel 다운로드",
+                data=excel_buffer,
+                file_name="전공선택_신청자_데이터.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        else:
+            st.header("전공선택 신청")
+        
+        # 기존 신청 정보 불러오기
+            saved_gpa, saved_courses, saved_majors, is_submitted = get_application(st.session_state.student_id)
+        
+            if is_submitted:
+                st.success("✅ 이미 최종 제출된 신청서입니다.")
+                st.info("제출된 내용을 확인하고 PDF를 다운로드할 수 있습니다.")
+        
+        # 폼 생성
+            with st.form("application_form"):
+                col1, col2 = st.columns(2)
+            
+                with col1:
+                    st.subheader("📊 학업 정보")
+                
+                # 학점 입력
+                    gpa = st.number_input(
+                        "1학기 학점 (4.3 만점)",
+                        min_value=0.0,
+                        max_value=4.3,
+                        value=saved_gpa if saved_gpa else 0.0,
+                        step=0.1,
+                        format="%.2f",
+                        disabled=is_submitted
+                    )
+                
+                # 이수 교과목 입력
+                    available_courses = [
+                        "대학기초수학", "이산수학", "기초물리1", "기초물리2",
+                        "파이썬프로그래밍", "미분적분학", "C프로그래밍"
+                    ]
+                
+                    selected_courses = st.multiselect(
+                        "이수한 교과목을 선택하세요",
+                        available_courses,
+                        default=saved_courses,
+                        disabled=is_submitted
+                    )
+            
+                with col2:
+                    st.subheader("🎯 전공 지망 순위")
+                
+                    major_options = ["", "인공지능", "컴퓨터과학", "데이터사이언스", "신소재물리", "지능형전자시스템"]
+                
+                    majors = []
+                    for i in range(5):
+                        major = st.selectbox(
+                            f"{i+1}지망",
+                            major_options,
+                            index=major_options.index(saved_majors[i]) if saved_majors[i] in major_options else 0,
+                            disabled=is_submitted
+                        )
+                        majors.append(major)
+            
+            # 버튼들
+                col1, col2, col3 = st.columns(3)
+            
+                with col1:
+                    save_button = st.form_submit_button("💾 임시저장", disabled=is_submitted)
+            
+                with col2:
+                    submit_button = st.form_submit_button("📋 최종제출", disabled=is_submitted)
+            
+                with col3:
+                    # PDF 다운로드는 폼 외부에서 처리
+                    pass
+        
+            # 폼 처리
+            if save_button:
+                save_application(st.session_state.student_id, gpa, selected_courses, majors, False)
+                st.success("임시저장이 완료되었습니다!")
+        
+            if submit_button:
+                # 유효성 검사
+                if gpa <= 0:
+                    st.error("학점을 입력해주세요.")
+                elif not any(majors):
+                    st.error("최소 1개의 전공을 선택해주세요.")
+                else:
+                    save_application(st.session_state.student_id, gpa, selected_courses, majors, True)
+                    st.success("최종 제출이 완료되었습니다!")
+                    st.balloons()
+                    st.rerun()
+        
+        # PDF 다운로드 버튼 (현재 정보 기준)
+            if gpa > 0 or any(majors):
+                st.subheader("📄 PDF 다운로드")
+                if st.button("신청서 PDF 다운로드"):
+                    pdf_buffer = create_pdf(
+                        st.session_state.student_id,
+                        st.session_state.name,
+                        gpa,
+                        selected_courses,
+                        majors
+                    )
+                
+                    st.download_button(
+                        label="📥 PDF 파일 다운로드",
+                        data=pdf_buffer.getvalue(),
+                        file_name=f"전공선택신청서_{st.session_state.student_id}.pdf",
+                        mime="application/pdf"
+                    )
+    
+    else:
+        st.info("👈 사이드바에서 로그인하거나 회원가입을 해주세요.")
+        
+        # 시스템 소개
+        st.header("📋 시스템 안내")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("🎯 선택 가능한 전공")
+            majors_info = [
+                "• 인공지능",
+                "• 컴퓨터과학", 
+                "• 데이터사이언스",
+                "• 신소재물리",
+                "• 지능형전자시스템"
+            ]
+            for major in majors_info:
+                st.write(major)
+        
+        with col2:
+            st.subheader("📚 이수 가능한 교과목")
+            courses_info = [
+                "• 대학기초수학",
+                "• 이산수학",
+                "• 기초물리1",
+                "• 기초물리2", 
+                "• 파이썬프로그래밍",
+                "• 미분적분학",
+                "• C프로그래밍"
+            ]
+            for course in courses_info:
+                st.write(course)
+        
+        st.subheader("✨ 주요 기능")
+        features = [
+            "🔐 학번과 비밀번호로 안전한 로그인",
+            "📊 1학기 학점과 이수교과목 입력",
+            "🎯 1지망부터 5지망까지 전공 순위 선택",
+            "💾 임시저장으로 언제든 수정 가능",
+            "📋 최종제출 후 내용 확정",
+            "📄 신청서 PDF 다운로드"
+        ]
+        for feature in features:
+            st.write(feature)
+
+if __name__ == "__main__":
+    main()
