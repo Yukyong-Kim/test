@@ -323,7 +323,7 @@ def main():
             saved_gpa, saved_courses, saved_majors, is_submitted = get_application(st.session_state.student_id)
         
             if is_submitted:
-                st.success("✅ 이미 최종 제출된 신청서입니다.")
+                st.success("✅ 최종 제출되었습니다.")
                 st.info("제출된 내용을 확인하고 PDF를 다운로드할 수 있습니다.")
         
         # 폼 생성
@@ -404,8 +404,8 @@ def main():
         
         # PDF 다운로드 버튼 (현재 정보 기준)
             if gpa > 0 or any(majors):
-                st.subheader("📄 PDF 다운로드")
-                if st.button("신청서 PDF 다운로드"):
+                st.subheader("📄 PDF 다운로드하세요.")
+                if st.button("pdf 파일 생성"):
                     pdf_buffer = create_pdf(
                         st.session_state.student_id,
                         st.session_state.name,
