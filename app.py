@@ -404,22 +404,20 @@ def main():
         
         # PDF 다운로드 버튼 (현재 정보 기준)
             if gpa > 0 or any(majors):
-                st.subheader("📄 PDF 다운로드하세요.")
-                if st.button("pdf 파일 생성"):
-                    pdf_buffer = create_pdf(
-                        st.session_state.student_id,
-                        st.session_state.name,
-                        gpa,
-                        selected_courses,
-                        majors
-                    )
-                
-                    st.download_button(
-                        label="📥 PDF 파일 다운로드",
-                        data=pdf_buffer.getvalue(),
-                        file_name=f"전공선택신청서_{st.session_state.student_id}.pdf",
-                        mime="application/pdf"
-                    )
+                st.subheader(" 전공선택 신청서를 다운로드하세요.")
+                pdf_buffer = create_pdf(
+                    st.session_state.student_id,
+                    st.session_state.name,
+                    gpa,
+                    selected_courses,
+                    majors
+                )
+                st.download_button(
+                    label="📥 PDF 파일 다운로드",
+                    data=pdf_buffer.getvalue(),
+                    file_name=f"전공선택신청서_{st.session_state.student_id}.pdf",
+                    mime="application/pdf"
+                )
     
     else:
         st.info("👈 사이드바에서 로그인하거나 회원가입을 해주세요.")
