@@ -373,7 +373,7 @@ def main():
                 st.info("등록된 학생이 없습니다.")
     
     elif menu == "전공 선택" and st.session_state.logged_in:
-        st.header(f"전공 선택 - {st.session_state.student_name}님")
+        st.header(f"전공 선택 - {st.session_state.student_name}님. 최종제출 후 수정불가합니다.")
         
         # 기존 데이터 불러오기
         saved_gpa, saved_courses, saved_preferences, is_submitted = load_student_data(st.session_state.student_id)
