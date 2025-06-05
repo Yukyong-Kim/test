@@ -273,8 +273,7 @@ def main():
     
     # 이수 가능 과목 목록
     available_courses = [
-        "대학기초수학", "이산수학", "기초물리1", "기초물리2", 
-        "파이썬프로그래밍", "미분적분학", "C프로그래밍"
+        "대학기초수학", "이산수학", "기초물리1", "공학개론", "파이썬프로그래밍"
     ]
     
     if menu == "회원가입":
@@ -380,7 +379,7 @@ def main():
         saved_gpa, saved_courses, saved_preferences, is_submitted = load_student_data(st.session_state.student_id)
         
         if is_submitted:
-            st.success("✅ 이미 최종 제출이 완료되었습니다.")
+            st.success("✅ 최종 제출이 완료되었습니다.")
             st.info("제출된 내용을 확인하고 PDF를 다운로드할 수 있습니다.")
         
         # 1학기 성적 정보
