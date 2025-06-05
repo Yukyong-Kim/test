@@ -15,7 +15,7 @@ import os
 
 # 페이지 설정
 st.set_page_config(
-    page_title="전공 선택 시스템",
+    page_title="첨단공학부 전공선택 시스템",
     page_icon="🎓",
     layout="wide"
 )
@@ -236,7 +236,7 @@ def create_pdf(student_id, name, gpa, courses, preferences):
 def main():
     init_database()
     
-    st.title("🎓 전공 선택 시스템")
+    st.title("🎓첨단공학부 전공선택 시스템")
     
     # 세션 상태 초기화
     if 'logged_in' not in st.session_state:
