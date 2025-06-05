@@ -173,20 +173,18 @@ def create_pdf(student_id, name, gpa, courses, preferences):
     
     # 한글 폰트 등록 시도 (시스템에 따라 다를 수 있음)
     try:
-        # Windows의 경우
-        font_path = "C:/Windows/Fonts/malgun.ttf"  # 맑은 고딕
+        font_path = os.path.join(os.path.dirname(__file__), "NotoSansKR-Regular.ttf")
         if os.path.exists(font_path):
-            pdfmetrics.registerFont(TTFont("MalgunGothic", font_path))
-            korean_font = "MalgunGothic"
+            pdfmetrics.registerFont(TTFont("NotoSans", font_path))
+            korean_font = "NotoSans"
         else:
-            # Linux/Mac의 경우 또는 폰트가 없는 경우
-            korean_font = "Helvetica"
+            korean_font = "Helvetica"  # fallback    
     except:
-        korean_font = "Helvetica"
+        korean_font = 'Helvetica'
     
     # 제목
     try:
-        p.setFont(korean_font + "-Bold" if korean_font == "MalgunGothic" else "Helvetica-Bold", 20)
+        p.setFont(korean_font + "-Bold" if korean_font == "NotoSans" else "Helvetica-Bold", 20)
     except:
         p.setFont("Helvetica-Bold", 20)
     p.drawString(50, height - 50, "전공 선택 신청서")
