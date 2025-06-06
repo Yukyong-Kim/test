@@ -184,7 +184,7 @@ def create_pdf(student_id, name, gpa, courses, preferences):
     
     # 제목
     try:
-        p.setFont(korean_font + "-Bold" if korean_font == "NotoSans" else "Helvetica-Bold", 20)
+        p.setFont(korean_font, 20)
     except:
         p.setFont("Helvetica-Bold", 20)
     p.drawString(50, height - 50, "전공 선택 신청서")
